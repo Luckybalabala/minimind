@@ -2,7 +2,7 @@
 Model Module for MiniMind
 
 Includes core model components, Nested Learning memory modules,
-and Continual Learning components.
+Continual Learning components, and Test-Time Scaling components.
 """
 
 from .nested_memory import (
@@ -22,6 +22,15 @@ from .continual_learning import (
     create_forgetting_evaluator,
 )
 
+from .test_time_scaling import (
+    TestTimeAdapter,
+    MemoryBasedAdapter,
+    HybridAdapter,
+    AdaptationConfig,
+    create_test_time_adapter,
+    TestTimeBatchAdapter,
+)
+
 __all__ = [
     # Nested Learning
     'FastMemoryModule',
@@ -36,4 +45,11 @@ __all__ = [
     'create_replay_buffer',
     'create_task_sequence',
     'create_forgetting_evaluator',
+    # Test-Time Scaling
+    'TestTimeAdapter',
+    'MemoryBasedAdapter',
+    'HybridAdapter',
+    'AdaptationConfig',
+    'create_test_time_adapter',
+    'TestTimeBatchAdapter',
 ]
