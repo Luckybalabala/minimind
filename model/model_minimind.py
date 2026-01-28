@@ -3,6 +3,7 @@
 # 📘📘📘📘📘📘📘📘📘📘📘📘📘📘📘📘📘📘📘📘📘📘📘📘📘📘📘📘📘📘📘📘📘📘📘📘📘📘📘📘📘📘📘📘📘📘📘📘
 
 from transformers import PretrainedConfig
+from typing import Optional, List
 
 
 class MiniMindConfig(PretrainedConfig):
@@ -37,6 +38,16 @@ class MiniMindConfig(PretrainedConfig):
             aux_loss_alpha: float = 0.01,
             seq_aux: bool = True,
             norm_topk_prob: bool = True,
+            ####################################################
+            # Nested Learning Configuration
+            # When use_nested_learning is false, the following is invalid
+            ####################################################
+            use_nested_learning: bool = False,
+            num_memory_levels: int = 2,
+            memory_frequencies: Optional[List[int]] = None,
+            memory_type: str = 'delta',
+            fast_memory_dim: Optional[int] = None,
+            enable_continual_learning: bool = True,
             **kwargs
     ):
         super().__init__(**kwargs)
@@ -76,6 +87,20 @@ class MiniMindConfig(PretrainedConfig):
         self.aux_loss_alpha = aux_loss_alpha  # 辅助损失的alpha参数
         self.seq_aux = seq_aux  # 是否在序列级别上计算辅助损失
         self.norm_topk_prob = norm_topk_prob  # 是否标准化top-k概率
+        ####################################################
+        # Nested Learning Configuration
+        # When use_nested_learning is false, the following is invalid
+        ####################################################
+        self.use_nested_learning = use_nested_learning
+        self.num_memory_levels = num_memory_levels
+        # Default frequencies for MVP: [64, 512]
+        if memory_frequencies is None:
+            self.memory_frequencies = [64, 512] if use_nested_learning else []
+        else:
+            self.memory_frequencies = memory_frequencies
+        self.memory_type = memory_type
+        self.fast_memory_dim = fast_memory_dim if fast_memory_dim is not None else hidden_size
+        self.enable_continual_learning = enable_continual_learning
 
 
 # 📘📘📘📘📘📘📘📘📘📘📘📘📘📘📘📘📘📘📘📘📘📘📘📘📘📘📘📘📘📘📘📘📘📘📘📘📘📘📘📘📘📘📘📘📘📘📘📘
@@ -360,7 +385,17 @@ class MiniMindBlock(nn.Module):
         self.layer_id = layer_id
         self.input_layernorm = RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
         self.post_attention_layernorm = RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
-        self.mlp = FeedForward(config) if not config.use_moe else MOEFeedForward(config)
+
+        # Choose MLP based on configuration
+        if config.use_nested_learning:
+            # Import here to avoid circular dependency
+            from .nested_memory import create_memory_module
+            # Use fast memory module for nested learning
+            self.mlp = create_memory_module(config, level=0)
+            self.step_counter = 0
+            self.config = config
+        else:
+            self.mlp = FeedForward(config) if not config.use_moe else MOEFeedForward(config)
 
     def forward(self, hidden_states, position_embeddings, past_key_value=None, use_cache=False, attention_mask=None):
         residual = hidden_states
@@ -369,7 +404,21 @@ class MiniMindBlock(nn.Module):
             past_key_value, use_cache, attention_mask
         )
         hidden_states += residual
-        hidden_states = hidden_states + self.mlp(self.post_attention_layernorm(hidden_states))
+
+        # Apply MLP/Memory
+        if hasattr(self, 'config') and self.config.use_nested_learning:
+            # Nested Learning: determine if memory should update
+            self.step_counter += 1
+            freq = self.config.memory_frequencies[0] if len(self.config.memory_frequencies) > 0 else 1
+            should_update = (self.step_counter % freq == 0)
+
+            # Call memory module with update flag
+            mlp_out = self.mlp(self.post_attention_layernorm(hidden_states), update=should_update)
+            hidden_states = hidden_states + mlp_out
+        else:
+            # Standard MLP
+            hidden_states = hidden_states + self.mlp(self.post_attention_layernorm(hidden_states))
+
         return hidden_states, present_key_value
 
 
